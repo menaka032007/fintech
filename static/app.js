@@ -3,8 +3,10 @@ const ASSETS = ['Gold', 'Bitcoin', 'NVIDIA']
 const COLORS = { Gold: '#e9b55f', Bitcoin: '#f28b65', NVIDIA: '#55d6a4' }
 const state = { asset: 'Gold', btAsset: 'Gold', strategy: 'sma', mode: 'simple', selectedDate: null }
 const money = (value) => value == null ? '—' : '$' + Number(value).toLocaleString('en-US', { maximumFractionDigits: 2 })
-const pct = (value) => value == null ? '—' : (Number(value) * 100).toFixed(2) + '%'
-const num = (value) => value == null ? '—' : Number(value).toFixed(2)
+const pct = (value) => value == null ? 'Insufficient data' : (Number(value) * 100).toFixed(2) + '%'
+const num = (value) => value == null ? 'Insufficient data' : Number(value).toFixed(2)
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const YEARS = [2021, 2022, 2023, 2024, 2025, 2026]
 const dark = { paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#8ea1b0', family: 'Segoe UI,Arial' }, colorway: ['#62b4ff', '#42d3a6', '#e9b55f', '#ff7c83'], margin: { t: 28, l: 58, r: 18, b: 42 }, xaxis: { gridcolor: '#263747', linecolor: '#263747' }, yaxis: { gridcolor: '#263747', linecolor: '#263747' } }
 
 async function get(url) {
@@ -14,15 +16,46 @@ async function get(url) {
   return body
 }
 
+function selectedDateValue() {
+  const year = Number($('selectedYear').value)
+  const month = Number($('selectedMonth').value)
+  const day = Number($('selectedDay').value)
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function populateOptions(select, options, selected) {
+  select.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join('')
+  if (options.some((option) => String(option.value) === String(selected))) select.value = selected
+}
+
+function updateSelectedDate(preferredMonth, preferredDay) {
+  const year = Number($('selectedYear').value)
+  const lastMonth = year === 2026 ? 9 : 12
+  const month = Math.min(Number(preferredMonth || $('selectedMonth').value || 1), lastMonth)
+  populateOptions($('selectedMonth'), MONTHS.slice(0, lastMonth).map((label, index) => ({ value: index + 1, label })), month)
+  const selectedMonth = Number($('selectedMonth').value)
+  const maxDay = new Date(year, selectedMonth, 0).getDate()
+  const maxAllowedDay = year === 2026 && selectedMonth === 9 ? 20 : maxDay
+  const day = Math.min(Number(preferredDay || $('selectedDay').value || 1), maxAllowedDay)
+  populateOptions($('selectedDay'), Array.from({ length: maxAllowedDay }, (_, index) => ({ value: index + 1, label: String(index + 1) })), day)
+}
+
+function setupDateSelectors() {
+  populateOptions($('selectedYear'), YEARS.map((year) => ({ value: year, label: String(year) })), 2026)
+  updateSelectedDate(9, 20)
+  $('selectedYear').onchange = () => updateSelectedDate(1, 1)
+  $('selectedMonth').onchange = () => updateSelectedDate(Number($('selectedMonth').value), 1)
+}
+
 function query() {
-  return new URLSearchParams({ period: $('period').value, sma_short: $('smaShort').value, sma_long: $('smaLong').value, ema_period: $('emaPeriod').value, rolling_window: $('corrWindow').value }).toString()
+  return new URLSearchParams({ date: selectedDateValue(), sma_short: $('smaShort').value, sma_long: $('smaLong').value, ema_period: $('emaPeriod').value, rolling_window: $('corrWindow').value }).toString()
 }
 
 function metric(label, value, tone = '') { return `<div class="metric"><small>${label}</small><b class="${tone}">${value}</b></div>` }
 function formatDate(value) { return value ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—' }
-function value(value, formatter = num) { return value == null || Number.isNaN(Number(value)) ? 'N/A' : formatter(value) }
+function value(value, formatter = num) { return value == null || Number.isNaN(Number(value)) ? 'Insufficient data' : formatter(value) }
 function plot(id, traces, layout = {}) { Plotly.newPlot(id, traces, { ...dark, ...layout }, { responsive: true, displaylogo: false }) }
-function showError(error) { $('error').textContent = 'Market data could not be retrieved right now. Please try again.'; $('error').classList.remove('hidden'); console.error(error) }
+function showError(error) { $('error').textContent = error?.message || 'Market data could not be retrieved right now. Please try again.'; $('error').classList.remove('hidden'); console.error(error) }
 
 async function load() {
   $('error').classList.add('hidden'); $('refresh').disabled = true; $('refresh').textContent = '↻ Loading market data…'
@@ -42,9 +75,8 @@ async function loadBacktest() {
 async function loadComparison() { state.comparison = await get(`/api/strategy-comparison?${query()}&asset=${state.btAsset}`) }
 
 function renderAll() {
-  const period = state.overview.period
-  $('dateWindow').textContent = `${formatDate(period.start)} → ${formatDate(period.end)}`
-  $('dataDate').textContent = period.end
+  $('dateWindow').textContent = `Selected date: ${formatDate(state.overview.selected_date)}`
+  $('dataDate').textContent = state.overview.selected_date
   renderCards(); renderAsset(); renderRisk(); renderCorrelation(); renderBacktest(); renderComparison(); renderSummary(); renderRegimes()
   $('marketExport').href = '/api/export/market.csv?' + query()
 }
@@ -62,7 +94,7 @@ function renderRiskReturn(metrics) { plot('riskReturnChart', [{ x: metrics.map((
 
 function renderAsset() {
   const rows = state.assetData.prices; const dates = rows.map((row) => row.date)
-  state.selectedDate = rows.some((row) => row.date === state.selectedDate) ? state.selectedDate : rows[rows.length - 1]?.date
+  state.selectedDate = state.overview.selected_date
   $('chartExplanation').textContent = state.assetData.explanations?.chart || 'The chart shows price, moving averages, and historical drawdown.'
   plot('priceChart', [{ x: dates, y: rows.map((row) => row.close), name: 'Close', line: { color: COLORS[state.asset], width: 2 } }, { x: dates, y: rows.map((row) => row.sma), name: 'SMA ' + $('smaShort').value, line: { color: '#62b4ff' } }, { x: dates, y: rows.map((row) => row.sma_long), name: 'SMA ' + $('smaLong').value, line: { color: '#6a7d90', dash: 'dot' } }, { x: dates, y: rows.map((row) => row.ema), name: 'EMA ' + $('emaPeriod').value, line: { color: '#e9b55f', dash: 'dash' } }, { x: rows.filter((row) => row.buy_signal).map((row) => row.date), y: rows.filter((row) => row.buy_signal).map((row) => row.close), name: 'Buy', mode: 'markers', marker: { color: '#42d3a6', symbol: 'triangle-up', size: 9 } }, { x: rows.filter((row) => row.sell_signal).map((row) => row.date), y: rows.filter((row) => row.sell_signal).map((row) => row.close), name: 'Sell', mode: 'markers', marker: { color: '#ff7c83', symbol: 'triangle-down', size: 9 } }], { hovermode: 'x unified', yaxis: { title: 'Price' } })
   plot('performanceChart', [{ x: dates, y: rows.map((row) => row.cumulative_return), name: 'Cumulative return', fill: 'tozeroy', line: { color: '#42d3a6' } }], { yaxis: { tickformat: '.0%' } })
@@ -131,7 +163,11 @@ function renderSummary() { const rows = state.overview.assets; const highest = r
 function renderRegimes() { $('regimeTable').innerHTML = `<table><tr><th>Historical regime</th><th>Observations</th><th>Return</th><th>Volatility</th><th>Drawdown</th></tr>${(state.assetData.regimes || []).map((row) => `<tr><td><b>${row.regime}</b></td><td>${row.observations}</td><td class="${row.return >= 0 ? 'positive' : 'negative'}">${pct(row.return)}</td><td>${pct(row.volatility)}</td><td class="negative">${pct(row.drawdown)}</td></tr>`).join('')}</table>` }
 
 async function applyAsset() { state.asset = $('assetSelect').value; state.btAsset = $('btAsset').value; await load() }
-$('period').onchange = load; $('refresh').onclick = load; $('assetSelect').onchange = applyAsset; $('applyIndicators').onclick = load; $('corrWindow').onchange = load
+async function applyDate() {
+  await load()
+}
+setupDateSelectors()
+$('applyDate').onclick = applyDate; $('refresh').onclick = load; $('assetSelect').onchange = applyAsset; $('applyIndicators').onclick = load; $('corrWindow').onchange = load
 $('runBacktest').onclick = async () => { state.btAsset = $('btAsset').value; state.strategy = $('strategy').value; $('runBacktest').textContent = 'Running historical simulation…'; await loadBacktest(); renderBacktest(); $('runBacktest').textContent = 'Run backtest' }
 $('btAsset').onchange = async () => { state.btAsset = $('btAsset').value; await loadBacktest(); await loadComparison(); renderBacktest(); renderComparison() }
 $('strategy').onchange = async () => { state.strategy = $('strategy').value; await loadBacktest(); renderBacktest() }

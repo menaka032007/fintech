@@ -30,15 +30,20 @@ def what_happened(asset, metrics):
 
 
 def chart_explanation(asset, latest, metrics):
-    price_relation = "above" if latest.get("close", 0) >= latest.get("sma_long", 0) else "below"
-    volatility = "higher" if latest.get("annualized_volatility", 0) >= metrics.get("volatility", 0) else "lower"
-    crossover = "short moving average is above the long moving average" if latest.get("sma", 0) >= latest.get("sma_long", 0) else "short moving average is below the long moving average"
+    close = latest.get("close") or 0
+    sma_long = latest.get("sma_long") or 0
+    sma_short = latest.get("sma") or 0
+    rolling_volatility = latest.get("annualized_volatility") or 0
+    volatility_metric = metrics.get("volatility") or 0
+    price_relation = "above" if close >= sma_long else "below"
+    volatility = "higher" if rolling_volatility >= volatility_metric else "lower"
+    crossover = "short moving average is above the long moving average" if sma_short >= sma_long else "short moving average is below the long moving average"
     return f"{asset} price is currently {price_relation} SMA50, consistent with the historical {metrics.get('regime', 'transition').lower()} classification. Recent rolling volatility is {volatility} than the full-period annualized volatility, and the {crossover}."
 
 
 def regime_explanation(latest):
-    trend = "above" if latest.get("close", 0) >= latest.get("sma_long", 0) else "below"
-    volatility = "above" if latest.get("rolling_volatility", 0) >= latest.get("historical_volatility_median", 0) else "below"
+    trend = "above" if (latest.get("close") or 0) >= (latest.get("sma_long") or 0) else "below"
+    volatility = "above" if (latest.get("rolling_volatility") or 0) >= (latest.get("historical_volatility_median") or 0) else "below"
     return f"Price is {trend} SMA50 and current rolling volatility is {volatility} its historical median."
 
 

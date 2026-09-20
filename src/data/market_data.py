@@ -1,11 +1,11 @@
-from datetime import date
-from dateutil.relativedelta import relativedelta
+from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 import yfinance as yf
 
 CACHE = {}
-PERIOD_YEARS = {"1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10}
+MIN_DATE = date(2021, 1, 1)
+MAX_DATE = date(2026, 9, 20)
 
 
 def _flatten(columns):
@@ -50,33 +50,53 @@ def clean(raw, sma_short=20, sma_long=50, ema_period=20, rolling_window=20):
         raise ValueError(f"Downloaded data is missing: {', '.join(missing)}")
     df = df[required].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().sort_index()
     df = df[~df.index.duplicated(keep="last")]
-    if len(df) < max(60, sma_long + 5):
-        raise ValueError("Not enough historical observations for the selected indicators")
     return add_indicators(df, sma_short, sma_long, ema_period, rolling_window)
 
 
-def date_bounds(period="5Y", start=None, end=None):
-    if start:
-        first = pd.Timestamp(start).date()
-    else:
-        first = date.today() - relativedelta(years=PERIOD_YEARS.get(period, 5))
-    last = pd.Timestamp(end).date() if end else date.today()
+def date_bounds(selected_date=None, start_date=None, end_date=None, period=None, start=None, end=None):
+    if selected_date:
+        try:
+            selected = pd.Timestamp(selected_date).date()
+        except (TypeError, ValueError) as error:
+            raise ValueError("Date must use YYYY-MM-DD format") from error
+        if selected < MIN_DATE:
+            raise ValueError("Selected date cannot be before 2021-01-01")
+        if selected > MAX_DATE:
+            raise ValueError("Selected date cannot be after 2026-09-20")
+        return MIN_DATE, selected + timedelta(days=1)
+    first_value = start_date or start or MIN_DATE.isoformat()
+    last_value = end_date or end or MAX_DATE.isoformat()
+    try:
+        first = pd.Timestamp(first_value).date()
+        last = pd.Timestamp(last_value).date()
+    except (TypeError, ValueError) as error:
+        raise ValueError("Dates must use YYYY-MM-DD format") from error
+    if first < MIN_DATE:
+        raise ValueError("Start date cannot be before 2021-01-01")
+    if last > MAX_DATE:
+        raise ValueError("End date cannot be after 2026-09-20")
     if first >= last:
-        raise ValueError("Start date must be before end date")
-    return first, last + relativedelta(days=1)
+        raise ValueError("FROM date must be earlier than TO date")
+    return first, last + timedelta(days=1)
 
 
-def get_asset_data(ticker, period="5Y", start=None, end=None, sma_short=20, sma_long=50, ema_period=20, rolling_window=20):
-    start_date, end_date = date_bounds(period, start, end)
-    key = (ticker, start_date.isoformat(), end_date.isoformat(), sma_short, sma_long, ema_period, rolling_window)
+def get_asset_data(ticker, selected_date=None, period=None, start_date=None, end_date=None, start=None, end=None, sma_short=20, sma_long=50, ema_period=20, rolling_window=20):
+    first, last = date_bounds(selected_date, start_date, end_date, period, start, end)
+    key = (ticker, selected_date, first.isoformat(), last.isoformat(), sma_short, sma_long, ema_period, rolling_window)
     if key not in CACHE:
-        download_args = {"auto_adjust": True, "progress": False, "threads": False}
-        if period == "MAX" and not start:
-            download_args["period"] = "max"
-        else:
-            download_args.update({"start": start_date.isoformat(), "end": end_date.isoformat()})
+        download_args = {
+            "start": first.isoformat(),
+            "end": last.isoformat(),
+            "interval": "1d",
+            "auto_adjust": True,
+            "progress": False,
+            "threads": False,
+        }
         raw = yf.download(ticker, **download_args)
-        CACHE[key] = clean(raw, sma_short, sma_long, ema_period, rolling_window)
+        frame = clean(raw, sma_short, sma_long, ema_period, rolling_window)
+        if selected_date and pd.Timestamp(selected_date) not in frame.index:
+            raise ValueError("No market data available for this date.")
+        CACHE[key] = frame
     return CACHE[key].copy()
 
 

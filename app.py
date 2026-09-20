@@ -10,7 +10,7 @@ from flask_cors import CORS
 from src.analysis.metrics import asset_metrics, correlation_matrix, drawdown_details, quant_insights, regime_summary
 from src.analysis.explanations import asset_explanation, chart_explanation, correlation_explanation, metric_definitions, strategy_explanation, what_happened, regime_explanation, backtest_explanation
 from src.backtesting.engine import run_backtest
-from src.data.market_data import PERIOD_YEARS, get_all_assets, get_asset_data
+from src.data.market_data import MAX_DATE, MIN_DATE, get_all_assets, get_asset_data
 
 load_dotenv()
 app = Flask(__name__)
@@ -23,7 +23,7 @@ STRATEGIES = {"sma", "ema", "momentum", "mean_reversion"}
 
 def params():
     return {
-        "period": request.args.get("period", "5Y"), "start": request.args.get("start") or None, "end": request.args.get("end") or None,
+        "selected_date": request.args.get("date") or request.args.get("selected_date") or MAX_DATE.isoformat(),
         "sma_short": int(request.args.get("sma_short", 20)), "sma_long": int(request.args.get("sma_long", 50)),
         "ema_period": int(request.args.get("ema_period", 20)), "rolling_window": int(request.args.get("rolling_window", 20)),
         "momentum_lookback": int(request.args.get("momentum_lookback", 20)), "mean_reversion_lookback": int(request.args.get("mean_reversion_lookback", 20)),
@@ -32,7 +32,9 @@ def params():
 
 def selected_assets():
     raw = request.args.get("assets")
-    names = [item.strip() for item in raw.split(",")] if raw else list(ASSETS)
+    requested = [item.strip() for item in raw.split(",")] if raw else list(ASSETS)
+    ticker_to_name = {ticker: name for name, ticker in ASSETS.items()}
+    names = [ticker_to_name.get(item, item) for item in requested]
     unknown = [name for name in names if name not in ASSETS]
     if unknown: raise ValueError(f"Unknown asset(s): {', '.join(unknown)}")
     return {name: ASSETS[name] for name in names}
@@ -57,7 +59,7 @@ def records(df):
 
 def load(names=None):
     settings = params()
-    data_settings = {key: settings[key] for key in ["period", "start", "end", "sma_short", "sma_long", "ema_period", "rolling_window"]}
+    data_settings = {key: settings[key] for key in ["selected_date", "sma_short", "sma_long", "ema_period", "rolling_window"]}
     return get_all_assets(names or selected_assets(), **data_settings)
 
 
@@ -70,7 +72,7 @@ def handle(function):
 def period_payload(frames, settings):
     first = min(frame.index[0] for frame in frames.values()).strftime("%Y-%m-%d")
     last = max(frame.index[-1] for frame in frames.values()).strftime("%Y-%m-%d")
-    return {"period": {"start": first, "end": last, "label": settings["period"] if settings["period"] in PERIOD_YEARS or settings["period"] == "MAX" else "Custom"}, "source": "Yahoo Finance via yfinance", "parameters": settings}
+    return {"period": {"start": first, "end": last, "label": "Selected date"}, "selected_date": settings["selected_date"], "source": "Yahoo Finance via yfinance", "parameters": settings}
 
 
 @app.get("/")
@@ -80,13 +82,17 @@ def home(): return render_template("index.html")
 def health(): return jsonify({"status": "ok"})
 
 @app.get("/api/config")
-def config(): return jsonify({"success": True, "assets": ASSETS, "periods": ["1Y", "3Y", "5Y", "10Y", "MAX"], "strategies": sorted(STRATEGIES), "initial_capital": INITIAL_CAPITAL, "transaction_cost": TRANSACTION_COST})
+def config(): return jsonify({"success": True, "assets": ASSETS, "date_range": {"min": MIN_DATE.isoformat(), "max": MAX_DATE.isoformat()}, "strategies": sorted(STRATEGIES), "initial_capital": INITIAL_CAPITAL, "transaction_cost": TRANSACTION_COST})
 
 @app.get("/api/market-data")
 def market_data():
     def result():
         settings = params(); frames = load(); payload = period_payload(frames, settings)
-        payload["assets"] = [{"asset": name, "ticker": ASSETS[name], "data": records(frame)} for name, frame in frames.items()]
+        payload["assets"] = []
+        for name, frame in frames.items():
+            data = records(frame)
+            selected = next(row for row in data if row["date"] == settings["selected_date"])
+            payload["assets"].append({"asset": name, "ticker": ASSETS[name], "data": data, "selected": selected})
         return payload
     return handle(result)
 
@@ -105,9 +111,9 @@ def overview():
 def asset(name):
     if name not in ASSETS: return jsonify({"success": False, "error": "Unknown asset"}), 404
     def result():
-        settings = params(); data_settings = {key: settings[key] for key in ["period", "start", "end", "sma_short", "sma_long", "ema_period", "rolling_window"]}; frame = get_asset_data(ASSETS[name], **data_settings)
+        settings = params(); data_settings = {key: settings[key] for key in ["selected_date", "sma_short", "sma_long", "ema_period", "rolling_window"]}; frame = get_asset_data(ASSETS[name], **data_settings)
         metrics = asset_metrics(frame); latest = records(frame)[-1]
-        return {"asset": name, "ticker": ASSETS[name], "metrics": metrics, "prices": records(frame), "regimes": regime_summary(frame), "drawdown": drawdown_details(frame), "explanations": {"what_happened": what_happened(name, metrics), "chart": chart_explanation(name, latest, metrics), "regime": regime_explanation({**latest, "historical_volatility_median": frame.RollingVolatility.median()})}, "definitions": metric_definitions(), **period_payload({name: frame}, settings)}
+        return {"asset": name, "ticker": ASSETS[name], "metrics": metrics, "prices": records(frame), "regimes": regime_summary(frame), "drawdown": drawdown_details(frame), "explanations": {"what_happened": what_happened(name, metrics), "chart": chart_explanation(name, latest, metrics), "regime": regime_explanation({**latest, "historical_volatility_median": frame.RollingVolatility.dropna().median()})}, "definitions": metric_definitions(), **period_payload({name: frame}, settings)}
     return handle(result)
 
 @app.get("/api/analysis")
@@ -144,7 +150,7 @@ def backtest():
     def result():
         name = request.args.get("asset", "NVIDIA"); strategy = request.args.get("strategy", "sma")
         if name not in ASSETS or strategy not in STRATEGIES: raise ValueError("Unknown asset or strategy")
-        settings = params(); data_settings = {key: settings[key] for key in ["period", "start", "end", "sma_short", "sma_long", "ema_period", "rolling_window"]}; frame = get_asset_data(ASSETS[name], **data_settings)
+        settings = params(); data_settings = {key: settings[key] for key in ["selected_date", "sma_short", "sma_long", "ema_period", "rolling_window"]}; frame = get_asset_data(ASSETS[name], **data_settings)
         output = run_backtest(frame, strategy, float(request.args.get("initial_capital", INITIAL_CAPITAL)), float(request.args.get("transaction_cost", TRANSACTION_COST)), float(request.args.get("position_size", 1)), **{key: settings[key] for key in ["sma_short", "sma_long", "ema_period", "momentum_lookback", "mean_reversion_lookback"]})
         output["explanations"] = {"strategy": strategy_explanation(strategy, output["parameters"]), "summary": backtest_explanation(name, output["strategy_name"], output["metrics"], output["buy_hold"], output["parameters"])}
         return {"asset": name, "ticker": ASSETS[name], "strategy": strategy, **output, **period_payload({name: frame}, settings)}
@@ -155,7 +161,7 @@ def summary():
     def result():
         settings = params(); frames = load(); payload = period_payload(frames, settings); metrics = [{"asset": name, **asset_metrics(frame)} for name, frame in frames.items()]
         selected_strategy = request.args.get("strategy", "sma"); tests = [{"asset": name, **run_backtest(frame, selected_strategy, INITIAL_CAPITAL, TRANSACTION_COST)} for name, frame in frames.items()]
-        highest_return = max(metrics, key=lambda row: row["total_return"])["asset"]; highest_vol = max(metrics, key=lambda row: row["volatility"])["asset"]
+        highest_return = max(metrics, key=lambda row: row["total_return"] or float("-inf"))["asset"]; highest_vol = max(metrics, key=lambda row: row["volatility"] or float("-inf"))["asset"]
         payload.update({"assets": metrics, "strategy": tests, "insights": quant_insights(metrics, correlation_matrix(frames).round(5).to_dict()), "definitions": metric_definitions()})
         return payload
     return handle(result)
@@ -165,7 +171,7 @@ def strategy_comparison():
     def result():
         settings = params(); name = request.args.get("asset", "Gold")
         if name not in ASSETS: raise ValueError("Unknown asset")
-        frame = get_asset_data(ASSETS[name], **{key: settings[key] for key in ["period", "start", "end", "sma_short", "sma_long", "ema_period", "rolling_window"]})
+        frame = get_asset_data(ASSETS[name], **{key: settings[key] for key in ["selected_date", "sma_short", "sma_long", "ema_period", "rolling_window"]})
         results = []
         for strategy in sorted(STRATEGIES):
             results.append({"strategy": strategy, **run_backtest(frame, strategy, INITIAL_CAPITAL, TRANSACTION_COST, 1, **{key: settings[key] for key in ["sma_short", "sma_long", "ema_period", "momentum_lookback", "mean_reversion_lookback"]})})

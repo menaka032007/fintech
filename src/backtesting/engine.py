@@ -24,13 +24,14 @@ def signal_for(df, strategy, sma_short=20, sma_long=50, ema_period=20, momentum_
 
 
 def metrics(equity, returns, trades):
-    volatility = returns.std() * np.sqrt(252)
-    sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() > 0 else np.nan
+    enough_returns = len(returns.dropna()) >= 2
+    volatility = returns.std() * np.sqrt(252) if enough_returns else np.nan
+    sharpe = returns.mean() / returns.std() * np.sqrt(252) if enough_returns and returns.std() > 0 else np.nan
     return {"final_value": float(equity.iloc[-1]), "total_return": float(equity.iloc[-1] / equity.iloc[0] - 1),
             "annualized_return": float((equity.iloc[-1] / equity.iloc[0]) ** (252 / max(len(equity), 1)) - 1),
             "volatility": float(volatility) if np.isfinite(volatility) else None,
             "sharpe": float(sharpe) if np.isfinite(sharpe) else None,
-            "max_drawdown": float((equity / equity.cummax() - 1).min()), "trades": int(trades)}
+            "max_drawdown": float((equity / equity.cummax() - 1).min()) if enough_returns else None, "trades": int(trades)}
 
 
 def run_backtest(df, strategy, initial=1000, cost=.001, position_size=1, **params):

@@ -14,15 +14,16 @@ def annualized_return(close):
 def asset_metrics(df, risk_free_rate=0):
     returns = df.DailyReturn.dropna()
     drawdown = df.Drawdown if "Drawdown" in df else df.Close / df.Close.cummax() - 1
-    volatility = returns.std() * np.sqrt(252)
+    enough_returns = len(returns) >= 2
+    volatility = returns.std() * np.sqrt(252) if enough_returns else np.nan
     excess = returns - risk_free_rate / 252
-    sharpe = excess.mean() / returns.std() * np.sqrt(252) if returns.std() > 0 else np.nan
+    sharpe = excess.mean() / returns.std() * np.sqrt(252) if enough_returns and returns.std() > 0 else np.nan
     return {
         "latest_price": safe(df.Close.iloc[-1]), "daily_return": safe(df.DailyReturn.iloc[-1]),
         "total_return": safe(df.Close.iloc[-1] / df.Close.iloc[0] - 1),
         "annualized_return": safe(annualized_return(df.Close)), "volatility": safe(volatility),
-        "sharpe": safe(sharpe), "max_drawdown": safe(drawdown.min()),
-        "downside_volatility": safe(returns[returns < 0].std() * np.sqrt(252)),
+        "sharpe": safe(sharpe), "max_drawdown": safe(drawdown.min()) if enough_returns else None,
+        "downside_volatility": safe(returns[returns < 0].std() * np.sqrt(252)) if enough_returns else None,
         "observations": int(len(df)), "start_date": df.index[0].strftime("%Y-%m-%d"),
         "end_date": df.index[-1].strftime("%Y-%m-%d"), "regime": str(df.Regime.iloc[-1]),
     }
