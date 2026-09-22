@@ -2,7 +2,8 @@ const $ = (id) => document.getElementById(id)
 const ASSETS = ['Gold', 'Bitcoin', 'NVIDIA']
 const COLORS = { Gold: '#e9b55f', Bitcoin: '#f28b65', NVIDIA: '#55d6a4' }
 const state = { asset: 'Gold', btAsset: 'Gold', strategy: 'sma', mode: 'simple', selectedDate: null }
-const money = (value) => value == null ? '—' : '$' + Number(value).toLocaleString('en-US', { maximumFractionDigits: 2 })
+const USD_TO_INR = 83
+const money = (value) => value == null ? '—' : (Number(value) * USD_TO_INR).toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 })
 const pct = (value) => value == null ? 'Insufficient data' : (Number(value) * 100).toFixed(2) + '%'
 const num = (value) => value == null ? 'Insufficient data' : Number(value).toFixed(2)
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']

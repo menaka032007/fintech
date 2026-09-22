@@ -21,6 +21,7 @@ The platform turns raw Yahoo Finance OHLCV data into reproducible research outpu
 - CSV export links for market data and trades
 - Loading/error states, responsive dark financial-terminal UI, and reduced-motion support
 - Data-driven plain-language explanations for asset cards, charts, regimes, correlations, metrics, signals, and backtests
+- Monetary values are displayed in Indian rupees (INR), converting Yahoo Finance USD prices at the frontend rate configured in `static/app.js`
 - Risk-versus-return scatter, CAGR/trend context, drawdown peak/trough/recovery details, and historical strategy comparison
 - Clickable historical chart dates with synchronized selected-date OHLC/indicator, return, regime, and signal details
 - Simple Mode for beginners and Research Mode for detailed trade and regime tables
@@ -54,6 +55,8 @@ TRANSACTION_COST=0.001
 ```
 
 `TRANSACTION_COST` is a decimal fraction: `0.001` means 0.10% per position turnover.
+
+Displayed USD-denominated market and portfolio values are converted to INR using `USD_TO_INR` in `static/app.js` (currently 83 INR per USD). Returns, volatility, and other ratios are unchanged.
 
 ## API routes
 
